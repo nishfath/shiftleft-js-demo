@@ -6,7 +6,8 @@ on:
   workflow_dispatch:
 jobs:
   NextGen-Static-Analysis:
-    steps:
+   runs-on: ubuntu-latest
+   steps:
     - uses: actions/checkout@v3
     - name: Download ShiftLeft CLI
       run: |
@@ -19,6 +20,7 @@ jobs:
         
   Build-Rules: 
     needs: NextGen-Static-Analysis
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
     - name: Validate Build Rules
