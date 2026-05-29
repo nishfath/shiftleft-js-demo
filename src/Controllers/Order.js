@@ -53,13 +53,46 @@ class Order {
     console.log(req.session.orders);
   }
 
-  createStripeRequest(creditCard, price, address) {
-    const STRIPE_CLIENT_ID = 'AKIA2E0A8F3B244C9986';
-    const STRIPE_CLIENT_SECRET_KEY = '7CE556A3BC234CC1FF9E8A5C324C0BB70AA21B6D';
-    https.request(
-      `http://invalidstripe.com?STRIPE_CLIENT_ID=${STRIPE_CLIENT_ID}&STRIPE_CLIENT_SECRET_KEY=${STRIPE_CLIENT_SECRET_KEY}&price=${price}&address=${JSON.stringify(
-        address
-      )}`
+async createStripeRequest(creditCard, price, address) {
+  // Retrieve sensitive credentials from environment variables instead of hardcoding
+  const STRIPE_CLIENT_ID = process.env.STRIPE_CLIENT_ID;
+  const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
+  
+  // Validate that required environment variables are set
+  if (!STRIPE_CLIENT_ID || !STRIPE_SECRET_KEY) {
+    throw new Error('Stripe credentials are not configured');
+  }
+  
+  // Prepare request payload - use POST body instead of GET query parameters for sensitive data
+  const payload = {
+    clientId: STRIPE_CLIENT_ID,
+    price: price,
+    address: address
+  };
+  
+  // Set proper headers with authorization
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${STRIPE_SECRET_KEY}`
+  };
+  
+  try {
+    // Use HTTPS protocol with proper request method (POST instead of GET)
+    // Send sensitive data in request body, not in URL
+    const response = await axios.post(
+      'https://api.stripe.com/v1/payment_intents',
+      payload,
+      { headers: headers }
+    );
+    
+    return response.data;
+  } catch (error) {
+    // Log error securely without exposing sensitive information
+    console.error('Payment processing error:', error.message);
+    throw new Error('Failed to process payment');
+  }
+}
+
     );
   }
 
