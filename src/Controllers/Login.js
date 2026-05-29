@@ -10,14 +10,42 @@ class Login {
     res.redirect('/login');
   }
 
-  encryptData(secretText) {
-    const crypto = require('crypto');
+async encryptData(secretText) {
+  // Use AES-256-GCM for strong encryption instead of weak DES
+  const algorithm = 'aes-256-gcm';
+  
+  // Retrieve encryption key from environment variables or secure secret management service
+  // Never hardcode credentials in source code
+  const encryptionKey = process.env.ENCRYPTION_KEY;
+  
+  if (!encryptionKey) {
+    throw new Error('ENCRYPTION_KEY environment variable is not set');
+  }
+  
+  // Validate key length (must be 32 bytes for AES-256)
+  const keyBuffer = Buffer.from(encryptionKey, 'hex');
+  if (keyBuffer.length !== 32) {
+    throw new Error('ENCRYPTION_KEY must be 32 bytes (64 hex characters) for AES-256');
+  }
+  
+  // Generate a random initialization vector (IV) for each encryption operation
+  const iv = crypto.randomBytes(16);
+  
+  // Create cipher with strong algorithm
+  const cipher = crypto.createCipheriv(algorithm, keyBuffer, iv);
+  
+  // Encrypt the data
+  let encrypted = cipher.update(secretText, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  
+  // Get the authentication tag for GCM mode
+  const authTag = cipher.getAuthTag();
+  
+  // Return encrypted data along with IV and auth tag (needed for decryption)
+  // Format: iv:authTag:encryptedData
+  return iv.toString('hex') + ':' + authTag.toString('hex') + ':' + encrypted;
+}
 
-    // Weak encryption
-    const desCipher = crypto.createCipheriv(
-      'des',
-      "This is a simple password, don't guess it"
-    );
     return desCipher.write(secretText, 'utf8', 'hex'); // BAD: weak encryption
   }
 
