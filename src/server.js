@@ -1,6 +1,5 @@
 const express = require('express');
 const cookieParser = require('cookie-parser');
-const bodyParser = require('body-parser');
 const session = require('express-session');
 
 const { logger } = require('./Logger');
@@ -9,49 +8,57 @@ const registerViewRoutes = require('./views');
 
 const app = express();
 const port = process.env.PORT || 8088;
-const SESSION_SECRET_KEY = 'kjhdkd-sjkhsjsh-kjshshkdhsk-jsjhd';
+
+// Use environment variable for session secret - no hardcoded default
+if (!process.env.SESSION_SECRET_KEY) {
+  logger.error('SESSION_SECRET_KEY environment variable is not set. Application cannot start.');
+  process.exit(1);
+}
 
 const tarpitEnv = {
-  sessionSecretKey: process.env.SESSION_SECRET_KEY || SESSION_SECRET_KEY,
+  sessionSecretKey: process.env.SESSION_SECRET_KEY,
   applicationPort: process.env.PORT || 8088
 };
 
 app.set('tarpitEnv', tarpitEnv);
 
-// Insider attack
-const insider = function(req, res, next) {
-  /* Base64 Encoding of
-   * console.log(req);
-   * console.log(req.body);
-   * console.log(req.query);
-   */
-  const encoded =
-    'Y29uc29sZS5sb2cocmVxKTsgY29uc29sZS5sb2cocmVxLmJvZHkpOyBjb25zb2xlLmxvZyhyZXEucXVlcnkpOw==';
-  const newBuf = Buffer.from(encoded, 'base64');
-  eval(newBuf.toString('utf-8'));
-  next();
-};
+// Removed insider attack middleware - this is a critical security vulnerability
+// The eval() function executing base64-decoded code is extremely dangerous
 
-app.use(insider);
-
+// Error handling middleware
 app.use(function(err, req, res, next) {
   logger.error(err.stack);
-  res.status(500).send('Something broke!');
+  // Don't expose internal error details to client
+  res.status(500).json({ error: 'Internal server error' });
 });
 
-// parse application/x-www-form-urlencoded
-app.use(bodyParser.urlencoded({ extended: false }));
+// Set request size limits to prevent DoS attacks and resource exhaustion
+// parse application/x-www-form-urlencoded with strict limits
+app.use(express.urlencoded({ 
+  extended: false,
+  limit: '100kb',
+  parameterLimit: 100
+}));
 
-// parse application/json
-app.use(bodyParser.json());
+// parse application/json with strict limits
+app.use(express.json({ 
+  limit: '100kb'
+}));
 
 app.use(cookieParser());
 
+// Configure session with secure settings
 app.use(
   session({
-    secret: SESSION_SECRET_KEY,
+    secret: process.env.SESSION_SECRET_KEY,
     resave: false,
-    saveUninitialized: false
+    saveUninitialized: false,
+    cookie: {
+      secure: process.env.NODE_ENV === 'production', // Require HTTPS in production
+      httpOnly: true, // Prevent XSS attacks
+      maxAge: 1000 * 60 * 60 * 24, // 24 hours
+      sameSite: 'strict' // CSRF protection
+    }
   })
 );
 
@@ -65,4 +72,6 @@ app.listen(port, () =>
   logger.log(
     `Tarpit App listening on port ${port}!. Open url: http://localhost:${port}`
   )
+);
+
 );
