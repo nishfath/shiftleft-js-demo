@@ -1,55 +1,64 @@
 const crypto = require('crypto');
 const https = require('https');
 const mail = require('../Integrations/Mail');
+require('dotenv').config();
 
-// Retrieve encryption key from environment variables (32 bytes for AES-256)
-// Key should be stored in a secure location like AWS Secrets Manager, Azure Key Vault, or environment variables
+// Retrieve encryption key from environment variables
+// The key must be 32 bytes (256 bits) for AES-256
+// Generate using: crypto.randomBytes(32).toString('base64')
 const getEncryptionKey = () => {
   const key = process.env.ENCRYPTION_KEY;
   if (!key) {
     throw new Error('ENCRYPTION_KEY environment variable is not set');
   }
-  // Ensure the key is exactly 32 bytes for AES-256
+  
+  // Convert base64 encoded key to buffer
   const keyBuffer = Buffer.from(key, 'base64');
+  
   if (keyBuffer.length !== 32) {
-    throw new Error('ENCRYPTION_KEY must be 32 bytes (base64 encoded)');
+    throw new Error('ENCRYPTION_KEY must be 32 bytes for AES-256');
   }
+  
   return keyBuffer;
 };
 
 class Order {
   hex(key) {
-    // Use SHA-256 for proper hashing
+    // Hash Key using SHA-256
     return crypto.createHash('sha256').update(key).digest('hex');
   }
 
   encryptData(secretText) {
-    // Use AES-256-GCM for strong encryption as recommended by NIST
-    const algorithm = 'aes-256-gcm';
+    // Use AES-256-GCM for strong encryption (FIPS 140-2 compliant)
+    // Retrieve encryption key from secure source
     const encryptionKey = getEncryptionKey();
     
-    // Generate a random 12-byte IV for GCM mode
+    // Generate a random initialization vector (IV) for each encryption operation
+    // For GCM mode, 12 bytes (96 bits) is the recommended IV length
     const iv = crypto.randomBytes(12);
     
-    // Create cipher with AES-256-GCM
-    const cipher = crypto.createCipheriv(algorithm, encryptionKey, iv);
+    // Create cipher using AES-256-GCM (Galois/Counter Mode for authenticated encryption)
+    const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey, iv);
     
     // Encrypt the data
-    let encrypted = cipher.update(secretText, 'utf8');
-    encrypted = Buffer.concat([encrypted, cipher.final()]);
+    let encrypted = cipher.update(secretText, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
     
     // Get the authentication tag for integrity verification
     const authTag = cipher.getAuthTag();
     
-    // Return format: iv:authTag:encryptedData (all in hex)
-    return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`;
+    // Return encrypted data with IV and auth tag (needed for decryption)
+    // Format: iv:authTag:encryptedData
+    return iv.toString('hex') + ':' + authTag.toString('hex') + ':' + encrypted;
   }
 
   decryptData(encryptedText) {
     // Use AES-256-GCM instead of DES for strong encryption
     // AES-256-GCM is recommended by NIST and OWASP for symmetric encryption
-    const algorithm = 'aes-256-gcm';
+    
+    // Retrieve encryption key from secure source
     const encryptionKey = getEncryptionKey();
+    const algorithm = 'aes-256-gcm';
     
     // Parse the encrypted data which should contain IV, auth tag, and encrypted content
     // Expected format: iv:authTag:encryptedData (all in hex)
@@ -68,11 +77,6 @@ class Order {
       throw new Error('Invalid IV length');
     }
     
-    // Verify auth tag length (should be 16 bytes for GCM mode)
-    if (authTag.length !== 16) {
-      throw new Error('Invalid authentication tag length');
-    }
-    
     // Create decipher with AES-256-GCM
     const decipher = crypto.createDecipheriv(algorithm, encryptionKey, iv);
     
@@ -88,27 +92,26 @@ class Order {
 
   addToOrder(req, res) {
     const order = req.body;
-    // Remove console.log to prevent sensitive data exposure
+    console.log(req.body);
     if (req.session.orders) {
       const orders = JSON.parse(this.decryptData(req.session.orders));
-      order.id = crypto.randomBytes(32).toString('hex');
+      order.id = crypto.randomBytes(256).toString('hex');
       orders.push(order);
       req.session.orders = this.encryptData(JSON.stringify(orders));
-    } else {
-      // Initialize orders array if not exists
-      req.session.orders = this.encryptData(JSON.stringify([order]));
     }
-    res.sendStatus(200);
+    res.send(200);
   }
 
   removeOrder(req, res) {
     const { orderId } = req.body;
+    console.log(req.body);
     if (req.session.orders) {
       const orders = JSON.parse(this.decryptData(req.session.orders));
       const newOrders = orders.filter(order => orderId !== order.orderId);
       req.session.orders = this.encryptData(JSON.stringify(newOrders));
+      console.log(newOrders);
     }
-    res.sendStatus(200);
+    res.send(200);
   }
 
   checkout(req, res) {
@@ -120,10 +123,11 @@ class Order {
       }
       this.processCC(req, res, orders, totalPrice);
     }
+    console.log(req.session.orders);
   }
 
   createStripeRequest(creditCard, price, address) {
-    // Retrieve Stripe credentials from environment variables
+    // Retrieve API credentials from environment variables
     const STRIPE_CLIENT_ID = process.env.STRIPE_CLIENT_ID;
     const STRIPE_CLIENT_SECRET_KEY = process.env.STRIPE_CLIENT_SECRET_KEY;
     
@@ -131,24 +135,19 @@ class Order {
       throw new Error('Stripe credentials not configured');
     }
     
-    // Use HTTPS instead of HTTP for secure communication
-    // Use proper authorization headers instead of query parameters
-    const postData = JSON.stringify({
-      price: price,
-      address: address
-    });
-    
+    // Use HTTPS and proper authentication headers instead of URL parameters
     const options = {
       hostname: 'api.stripe.com',
       port: 443,
-      path: '/v1/payment_intents',
+      path: '/v1/charges',
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData),
-        'Authorization': `Bearer ${STRIPE_CLIENT_SECRET_KEY}`
+        'Authorization': `Bearer ${STRIPE_CLIENT_SECRET_KEY}`,
+        'Content-Type': 'application/x-www-form-urlencoded'
       }
     };
+    
+    const postData = `amount=${price * 100}&currency=usd`;
     
     const req = https.request(options, (res) => {
       let data = '';
@@ -156,12 +155,12 @@ class Order {
         data += chunk;
       });
       res.on('end', () => {
-        // Handle response
+        console.log('Payment processed:', data);
       });
     });
     
     req.on('error', (error) => {
-      console.error('Stripe API error:', error);
+      console.error('Payment error:', error);
     });
     
     req.write(postData);
@@ -183,7 +182,7 @@ class Order {
           const result = await db.collection('users').findOne({
             username
           });
-          const transactionId = crypto.randomBytes(32).toString('hex');
+          const transactionId = crypto.randomBytes(256).toString('hex');
           await db
             .collection('orders')
             .insertMany(orders.map(order => ({ ...order, transactionId })));
@@ -191,22 +190,21 @@ class Order {
             transactionId,
             date: new Date().valueOf(),
             username,
-            // Do not log sensitive credit card information
+            cc: result.creditCard,
             shippingAddress: address,
             billingAddress: result.address
           };
+          console.log(transaction);
           await db.collection('transactions').insertOne(transaction);
           self.createStripeRequest(
             result.creditCard,
             totalPrice,
             transaction.billingAddress
           );
-          // Sanitize username to prevent XSS attacks
-          const sanitizedUsername = username.replace(/[<>]/g, '');
           const message = `
-            Hello ${sanitizedUsername},
+            Hello ${username},
               We have processed your order. Please visit the following link to review your order
-              <a href="https://tarpit.com/orders/${encodeURIComponent(username)}?ref=mail&transactionId=${transactionId}">Review Order</a>
+              <a href="https://tarpit.com/orders/${username}?ref=mail&transactionId=${transactionId}">Review Order</a>
           `;
           mail.sendMail(
             'orders@tarpit.com',
@@ -214,20 +212,18 @@ class Order {
             `Order Successfully Processed`,
             message
           );
-          res.sendStatus(200);
         } else {
           console.error(err);
-          res.sendStatus(500);
         }
       });
     } catch (ex) {
-      console.error(ex);
-      res.sendStatus(500);
+      logger.error(ex);
     }
   }
 }
 
 module.exports = new Order();
+
 
 
 
