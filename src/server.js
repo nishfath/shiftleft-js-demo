@@ -10,56 +10,71 @@ const registerViewRoutes = require('./views');
 const app = express();
 const port = process.env.PORT || 8088;
 
-// Use environment variable for session secret - never hardcode secrets
+// Use environment variable for session secret, fail if not provided in production
 const SESSION_SECRET_KEY = process.env.SESSION_SECRET_KEY;
-
-// Validate that SESSION_SECRET_KEY is set
-if (!SESSION_SECRET_KEY) {
-  logger.error('SESSION_SECRET_KEY environment variable must be set');
-  process.exit(1);
+if (!SESSION_SECRET_KEY && process.env.NODE_ENV === 'production') {
+  throw new Error('SESSION_SECRET_KEY must be set in production environment');
 }
 
 const tarpitEnv = {
-  sessionSecretKey: SESSION_SECRET_KEY,
+  sessionSecretKey: SESSION_SECRET_KEY || 'default-dev-key-change-in-production',
   applicationPort: process.env.PORT || 8088
 };
 
 app.set('tarpitEnv', tarpitEnv);
 
-// REMOVED: Insider attack middleware - this was a critical security vulnerability
-// The eval() function executes arbitrary code and should never be used with any input
+// REMOVED: Insider attack middleware - this is a critical security vulnerability
+// The eval() function executing arbitrary code has been completely removed
 
-// Global error handler - placed after routes
+// Error handling middleware
 app.use(function(err, req, res, next) {
   logger.error(err.stack);
-  // Don't expose internal error details to client
-  res.status(500).json({ error: 'An internal error occurred' });
+  // Don't expose internal error details in production
+  if (process.env.NODE_ENV === 'production') {
+    res.status(500).send('Internal Server Error');
+  } else {
+    res.status(500).send('Something broke!');
+  }
 });
 
-// parse application/x-www-form-urlencoded
-app.use(bodyParser.urlencoded({ extended: false }));
+// Parse application/x-www-form-urlencoded with size limit
+app.use(bodyParser.urlencoded({ extended: false, limit: '10mb' }));
 
-// parse application/json
-app.use(bodyParser.json());
+// Parse application/json with size limit
+app.use(bodyParser.json({ limit: '10mb' }));
 
+// Cookie parser with httpOnly enabled by default
 app.use(cookieParser());
 
-// Configure session with secure cookie settings
+// Determine if running in production (HTTPS available)
+const isProduction = process.env.NODE_ENV === 'production';
+
+// Session configuration with secure cookie settings
 app.use(
   session({
-    secret: SESSION_SECRET_KEY,
+    secret: SESSION_SECRET_KEY || 'default-dev-key-change-in-production',
     resave: false,
     saveUninitialized: false,
-    name: 'sessionId',
+    name: 'sessionId', // Rename cookie to avoid default name
     cookie: {
-      path: '/',
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 3600000
+      secure: isProduction, // Set to true in production (requires HTTPS)
+      httpOnly: true, // Prevent client-side JavaScript access to cookies
+      sameSite: 'strict', // Restrict cookie to same-site requests
+      maxAge: 1000 * 60 * 60 * 24, // 24 hours session expiration
+      path: '/', // Cookie available for entire site
+      domain: process.env.COOKIE_DOMAIN || undefined // Set domain if needed
     }
   })
 );
+
+// Security headers middleware
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  next();
+});
 
 app.set('view engine', 'pug');
 app.set('views', `./src/Views`);
@@ -69,8 +84,10 @@ registerViewRoutes(app);
 
 app.listen(port, () =>
   logger.log(
-    `Tarpit App listening on port ${port}!. Open url: http://localhost:${port}`
+    `Tarpit App listening on port ${port}!. Open url: http${isProduction ? 's' : ''}://localhost:${port}`
   )
+);
+
 );
 
 );
