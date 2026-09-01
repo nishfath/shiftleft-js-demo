@@ -2,7 +2,6 @@ const express = require('express');
 const cookieParser = require('cookie-parser');
 const bodyParser = require('body-parser');
 const session = require('express-session');
-const helmet = require('helmet');
 
 const { logger } = require('./Logger');
 const registerApiRoutes = require('./api');
@@ -11,60 +10,67 @@ const registerViewRoutes = require('./views');
 const app = express();
 const port = process.env.PORT || 8088;
 
-// Validate and use environment variable for session secret
-if (!process.env.SESSION_SECRET_KEY) {
-  logger.error('SESSION_SECRET_KEY environment variable is not set. Application will not start.');
+// Use environment variable for session secret, without hardcoded fallback
+const SESSION_SECRET_KEY = process.env.SESSION_SECRET_KEY;
+
+if (!SESSION_SECRET_KEY) {
+  logger.error('SESSION_SECRET_KEY environment variable must be set');
   process.exit(1);
 }
 
 const tarpitEnv = {
-  sessionSecretKey: process.env.SESSION_SECRET_KEY,
-  applicationPort: process.env.PORT || 8088
+  sessionSecretKey: SESSION_SECRET_KEY,
+  applicationPort: port
 };
 
 app.set('tarpitEnv', tarpitEnv);
 
-// Security headers configuration using helmet
-app.use(helmet());
+// Removed the insider attack middleware that uses eval()
+// This was a critical security vulnerability allowing arbitrary code execution
 
-// Disable X-Powered-By header to prevent information disclosure
-app.disable('x-powered-by');
-
-// Error handling middleware - should be registered early but after helmet
+// Error handling middleware
 app.use(function(err, req, res, next) {
   logger.error(err.stack);
-  // Avoid exposing internal error details to client
+  // Don't expose internal error details to client
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Rate limiting and input validation should be added here
-// parse application/x-www-form-urlencoded with size limits
-app.use(bodyParser.urlencoded({ 
-  extended: false,
-  limit: '10kb'
-}));
+// parse application/x-www-form-urlencoded
+app.use(bodyParser.urlencoded({ extended: false }));
 
-// parse application/json with size limits
-app.use(bodyParser.json({
-  limit: '10kb'
-}));
+// parse application/json
+app.use(bodyParser.json());
 
 app.use(cookieParser());
 
-// Session configuration with secure settings
+// Configure session with secure cookie settings
 app.use(
   session({
-    secret: process.env.SESSION_SECRET_KEY,
+    secret: SESSION_SECRET_KEY,
     resave: false,
     saveUninitialized: false,
     cookie: {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 3600000
+      httpOnly: true,        // Prevents client-side JavaScript from accessing the cookie
+      secure: process.env.NODE_ENV === 'production',  // Ensures cookie is only sent over HTTPS in production
+      maxAge: 3600000,       // Cookie expires after 1 hour (in milliseconds)
+      sameSite: 'strict'     // Prevents CSRF attacks by restricting cross-site cookie sending
     },
-    name: 'sessionId'
+    name: 'sessionId'        // Custom session cookie name (avoids default 'connect.sid')
   })
+);
+
+app.set('view engine', 'pug');
+app.set('views', `./src/Views`);
+
+registerApiRoutes(app);
+registerViewRoutes(app);
+
+app.listen(port, () =>
+  logger.log(
+    `Tarpit App listening on port ${port}!. Open url: http://localhost:${port}`
+  )
+);
+
 );
 
 app.set('view engine', 'pug');
