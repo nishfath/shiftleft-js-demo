@@ -10,9 +10,10 @@ const registerViewRoutes = require('./views');
 const app = express();
 const port = process.env.PORT || 8088;
 
-// Use environment variable for session secret, without hardcoded fallback
+// Use environment variable for session secret - never hardcode secrets
 const SESSION_SECRET_KEY = process.env.SESSION_SECRET_KEY;
 
+// Validate that SESSION_SECRET_KEY is set
 if (!SESSION_SECRET_KEY) {
   logger.error('SESSION_SECRET_KEY environment variable must be set');
   process.exit(1);
@@ -20,19 +21,19 @@ if (!SESSION_SECRET_KEY) {
 
 const tarpitEnv = {
   sessionSecretKey: SESSION_SECRET_KEY,
-  applicationPort: port
+  applicationPort: process.env.PORT || 8088
 };
 
 app.set('tarpitEnv', tarpitEnv);
 
-// Removed the insider attack middleware that uses eval()
-// This was a critical security vulnerability allowing arbitrary code execution
+// REMOVED: Insider attack middleware - this was a critical security vulnerability
+// The eval() function executes arbitrary code and should never be used with any input
 
-// Error handling middleware
+// Global error handler - placed after routes
 app.use(function(err, req, res, next) {
   logger.error(err.stack);
   // Don't expose internal error details to client
-  res.status(500).json({ error: 'Internal server error' });
+  res.status(500).json({ error: 'An internal error occurred' });
 });
 
 // parse application/x-www-form-urlencoded
@@ -49,13 +50,14 @@ app.use(
     secret: SESSION_SECRET_KEY,
     resave: false,
     saveUninitialized: false,
+    name: 'sessionId',
     cookie: {
-      httpOnly: true,        // Prevents client-side JavaScript from accessing the cookie
-      secure: process.env.NODE_ENV === 'production',  // Ensures cookie is only sent over HTTPS in production
-      maxAge: 3600000,       // Cookie expires after 1 hour (in milliseconds)
-      sameSite: 'strict'     // Prevents CSRF attacks by restricting cross-site cookie sending
-    },
-    name: 'sessionId'        // Custom session cookie name (avoids default 'connect.sid')
+      path: '/',
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 3600000
+    }
   })
 );
 
@@ -69,6 +71,8 @@ app.listen(port, () =>
   logger.log(
     `Tarpit App listening on port ${port}!. Open url: http://localhost:${port}`
   )
+);
+
 );
 
 );
